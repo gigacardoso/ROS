@@ -1,0 +1,202 @@
+#########################################################################################
+#                                                                                       #
+#                                    Daniel Cardoso                                     #
+#                               daniel.cardoso18@live.com                               #
+#                                                                                       #
+#                                         ROS                                           #
+#                                                                                       #
+#                         Last Updated: 2013                                            #
+#                                   by: Daniel Cardoso                                  #
+#                                                                                       #
+#########################################################################################
+
+This project implements, in Racket, the Racket Object System (ROS). ROS provides sim-
+plified versions of the generic functions and multi-methods available in CLOS.
+It implements the features described in the following sections:
+
+			Generic Functions
+
+Implements syntax for the definition of a generic function, that only
+includes its name and the list of mandatory parameters. As an example, consider
+the following syntax for the definition of a generic function that \adds" things:
+(defgeneric add (x y))
+
+			Multi-Methods
+			
+Implements syntax for the definition of a multi-method, including the
+name of the generic function to which it belongs, the list of parameters, and
+the body of the method. The list of parameters must be a list of lists, each
+sub-list containing two elements: the name of the parameter and a predicate (a
+function) that determines the applicability of the method in what regards that
+parameter.
+
+As an example, consider the following syntax for the definition of two meth-
+ods of the generic function add:
+
+(defmethod add ((x number?) (y number?))
+(+ x y))
+(defmethod add ((x string?) (y string?))
+(string-append x y))
+
+Note, in the previous example, that number?, string?, +, and string-append
+are pre-defined functions in Racket.
+
+			Generic Function Call Protocol
+
+Implements a protocol for the application of a generic function to
+concrete arguments.
+Given a generic function gf and a list of arguments args, this protocol should
+select the set of applicable methods of gf, sort them according to their specificity,
+and, finally, apply the most specific method to args. Note that a method is
+applicable to a set of arguments if each argument satisfies the predicate of the
+corresponding parameter. If there is no applicable method, an error must be
+raised with the expression (error "Method missing for arguments" args).
+As an example, considering the previous method definitions for the generic
+function add, the following interaction should be expected:
+
+> (add 1 2)
+3
+> (add "Foo" "Bar")
+"FooBar"
+
+			Method Ordering
+			
+Implements a mechanism for sorting applicable methods. Precedence
+among applicable methods is determined by left-to-right consideration of pa-
+rameter predicates. Method m0 has higher precendence that method m1 if the
+predicate of the first parameter of m0 is more specific than the predicate of
+the first parameter of m1. If they are identical predicates, then precedence is
+determined by the next parameter and so on.
+Predicate specificity is not a trivial concept. To say that a predicate is more
+specific than other is equivalent to say that the set of values recognized by the
+first predicate is a subset of the values recognized by the second predicate. As
+an example, we can say that integer? is more specific than number? because all
+values that satisfy integer? also satisfy number? but not all values that satisfy
+number? also satisfy integer?.
+Racket has many pre-defined predicates and the programmer can easily de-
+fine additional ones. For this reason, the Racket language does not provide a
+direct way of testing the specificity of predicates, so you need to implement one.
+As a concrete example, consider:
+
+(defgeneric fact (n))
+(defmethod fact ((n zero?))
+1)
+(defmethod fact ((n integer?))
+(* n (fact (- n 1))))
+
+In this example, the call (fact 1) has just one applicable method, but the
+recursive call (fact 0) has two applicable methods, because the argument 0
+satisfies both predicates integer? and zero?. In order to sort the corresponding
+methods, it is necessary to assert that zero? is more specific than integer?.
+This is done using the function defsubtype, that accepts as arguments two
+functions and asserts the subtyping relation. The hierarchy of number types
+that is predefined in Racket, suggests, at the very least, the following relations:
+
+(defsubtype complex? number?)
+(defsubtype real? complex?)
+(defsubtype rational? real?)
+(defsubtype integer? rational?)
+(defsubtype zero? integer?)
+
+Note that, by transitivity, it should be possible to derive, e.g., that zero? is
+a subtype of number?.
+Obviously, more fine-grained relationships can be defined. For example,
+instead of having
+(defsubtype zero? integer?)
+we can have instead
+(defsubtype odd? integer?)
+(defsubtype even? integer?)
+(defsubtype zero? even?)
+
+Using the defsubtype relation, it becomes possible to define the specificity
+of predicates that is used to order applicable methods.
+However, it might not always be possible to establish the specificity among
+two predicates. As an example, consider the predicates integer? and positive?
+and the following generic function:
+
+(defgeneric what-are-you? (x))
+(defmethod what-are-you? ((x integer?))
+"an integer")
+(defmethod what-are-you? ((x positive?))
+"a positive number")
+
+The previous example is ambiguous because some, but not all, integers are
+positive and some, but not all, positive numbers are integers. In order to be
+deterministic, we will assume that when it is not possible to determine the
+specificity of predicates, method ordering relies instead on the definition order:
+if method m0 is defined before method m1, then m0 is more specific than m1.
+This reflects the typical pattern where we take care of the most specific cases
+first. In the previous example, this means that the query (what-are-you? 1)
+should return "an integer".
+As another example, we will (incorrectly) define the generic function length
+but assuming that there is no predefined subtyping relation between the predi-
+cates list? and null?:
+
+(defgeneric length (l))
+(defmethod length ((l list?))
+(+ 1 (length (rest l))))
+(defmethod length ((l null?)) 0)
+
+Using the above definition order, the call (length '(1 2 3 4)) triggers an
+error because the second method, that stops the recursion, is never called. In
+order to solve the problem, either the definition order is reversed, or we include
+the relation (defsubtype null? list?).
+
+			Dynamic Method Definition
+			
+Generic functions should be dynamic, in the sense that it should always be
+possible to define additional methods at run-time. As an example, consider the
+following function that computes the power function in a linear number of steps:
+
+(defgeneric power (x n))
+(defmethod power ((x number?) (n integer?))
+(* x (power x (- n 1))))
+(defmethod power ((x number?) (n zero?))1)
+
+After verifying that the function consumes way too much time, we might
+decide to speed it up by injecting an additional method that makes a significant
+fraction of the process to run in a logarithmic number of steps:
+
+(defmethod power ((x number?) (n even?))
+(let ((x^n/2 (power x (/ n 2))))
+(* x^n/2 x^n/2)))
+
+In order for this last method to have any effect, it is necessary to be able to
+dynamically update the generic function.
+
+			Dynamic Method Redefinition
+			
+It is possible to redefine a method of a generic function. To this end, you
+should treat two methods with the exact same sequence of parameter predicates
+as the same method. This can then be used to replace an old definition with a
+new one.
+This means that the following example correctly computes the factorial
+of an integer:
+
+(defgeneric fact (n))
+(defmethod fact ((n zero?))
+0)
+(defmethod fact ((n integer?))
+(* n (fact (- n 1))))
+(defmethod fact ((n zero?))1)
+
+	Reflective Operations
+	
+Implements reflective operations over generic functions and methods,
+including:
+	 -  generic-function-parameters that accepts a generic function and re-
+turns the list of parameters of the function.
+	 -  generic-function-methods that accepts a generic function and returns
+the list of methods of the function.
+	 -  method-types that accepts a method and returns the list of predicates
+used in the method parameter list.
+As an example, consider:
+
+> fact
+#<procedure:generic-function>
+> (generic-function-parameters fact)
+'(n)
+> (generic-function-methods fact)
+'(#<method> #<method>)
+> (map method-types (generic-function-methods fact))
+'((#<procedure:zero?>) (#<procedure:integer?>))
